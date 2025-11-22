@@ -177,7 +177,7 @@ impl Default for LogViewerApp {
             scroll_offset: 0.0,
             last_file_size: 0,
             show_search: false,
-            show_sidebar: true, // Open by default for visibility
+            show_sidebar: false, // Closed by default
             enabled_levels: {
                 let mut set = std::collections::HashSet::new();
                 set.insert(LogLevel::Info);
@@ -262,7 +262,7 @@ impl eframe::App for LogViewerApp {
                 ui.add_space(20.0);
                 
                 // File Controls
-                if ui.button("📁 Open").clicked() {
+                if ui.button("📁").on_hover_text("Open File").clicked() {
                     if let Some(path) = rfd::FileDialog::new()
                         .add_filter("Log files", &["log", "txt"])
                         .pick_file()
@@ -273,7 +273,7 @@ impl eframe::App for LogViewerApp {
                     }
                 }
                 
-                if ui.button("🔄 Reload").clicked() {
+                if ui.button("🔄").on_hover_text("Reload").clicked() {
                     if let Some(ref path) = self.current_file {
                         if let Err(e) = self.load_file(path.clone()) {
                             eprintln!("Error reloading file: {}", e);
@@ -297,7 +297,8 @@ impl eframe::App for LogViewerApp {
                 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     // Sidebar Toggle
-                    let sidebar_btn = ui.button(if self.show_sidebar { "Sidebar ⏵" } else { "Sidebar ⏴" });
+                    let sidebar_icon = if self.show_sidebar { "⏵" } else { "⏴" };
+                    let sidebar_btn = ui.button(sidebar_icon).on_hover_text("Toggle Sidebar");
                     if sidebar_btn.clicked() {
                         self.show_sidebar = !self.show_sidebar;
                     }
@@ -305,7 +306,7 @@ impl eframe::App for LogViewerApp {
                     ui.add_space(10.0);
                     
                     // Search Toggle
-                    let search_btn = ui.add(egui::Button::new("🔍 Search").selected(self.show_search));
+                    let search_btn = ui.add(egui::Button::new("🔍").selected(self.show_search)).on_hover_text("Toggle Search");
                     if search_btn.clicked() {
                         self.show_search = !self.show_search;
                         if self.show_search {
@@ -351,12 +352,12 @@ impl eframe::App for LogViewerApp {
                         }
                     }
                     
-                    if ui.button("Prev").clicked() {
+                    if ui.button("⬆").on_hover_text("Previous Match").clicked() {
                         self.search.prev_match();
                         self.scroll_to_match = true;
                     }
                     
-                    if ui.button("Next").clicked() {
+                    if ui.button("⬇").on_hover_text("Next Match").clicked() {
                         self.search.next_match();
                         self.scroll_to_match = true;
                     }
@@ -611,7 +612,7 @@ impl eframe::App for LogViewerApp {
                             
                             // Scroll to this chunk if it contains the match
                             if chunk_contains_match {
-                                response.scroll_to_me(Some(Align::Center));
+                                response.scroll_to_me(Some(Align::TOP));
                             }
                         }
                         
