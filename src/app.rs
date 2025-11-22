@@ -25,12 +25,8 @@ pub struct LogViewerApp {
     last_file_size: u64,
     
     show_search: bool,
-    show_config: bool,
+    show_sidebar: bool,
     enabled_levels: std::collections::HashSet<LogLevel>,
-    file_path_input: String,
-    show_file_dialog: bool,
-    current_directory: PathBuf,
-    file_dialog_files: Vec<PathBuf>,
     
     // New state fields
     focus_search: bool,
@@ -181,7 +177,7 @@ impl Default for LogViewerApp {
             scroll_offset: 0.0,
             last_file_size: 0,
             show_search: false,
-            show_config: false,
+            show_sidebar: true, // Open by default for visibility
             enabled_levels: {
                 let mut set = std::collections::HashSet::new();
                 set.insert(LogLevel::Info);
@@ -192,10 +188,6 @@ impl Default for LogViewerApp {
                 set.insert(LogLevel::Unknown);
                 set
             },
-            file_path_input: String::new(),
-            show_file_dialog: false,
-            current_directory: current_dir.clone(),
-            file_dialog_files: Self::list_files(&current_dir),
             focus_search: false,
             scroll_to_match: false,
         }
@@ -203,27 +195,12 @@ impl Default for LogViewerApp {
 }
 
 impl LogViewerApp {
-    fn list_files(dir: &PathBuf) -> Vec<PathBuf> {
-        let mut files = Vec::new();
-        if let Ok(entries) = fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_file() {
-                    if let Some(ext) = path.extension() {
-                        if ext == "log" || ext == "txt" || ext == "LOG" || ext == "TXT" {
-                            files.push(path);
-                        }
-                    }
-                }
-            }
-        }
-        files.sort();
-        files
-    }
+
 }
 
 impl eframe::App for LogViewerApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        use egui::*;
         // Handle keyboard shortcuts
         ctx.input(|input| {
             // Cmd+F or Ctrl+F to toggle search
@@ -260,83 +237,18 @@ impl eframe::App for LogViewerApp {
         // Check for file updates
         self.check_file_updates();
         
-        // Top menu bar
-        egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
-            egui::menu::bar(ui, |ui| {
-                ui.menu_button("File", |ui| {
-                    if ui.button("📁 Open File...").clicked() {
-                        if let Some(path) = rfd::FileDialog::new()
-                            .add_filter("Log files", &["log", "txt"])
-                            .pick_file()
-                        {
-                            if let Err(e) = self.load_file(path) {
-                                eprintln!("Error loading file: {}", e);
-                            }
-                        }
-                        ui.close_menu();
-                    }
-                    
-                    if ui.button("🔄 Reload").clicked() {
-                        if let Some(ref path) = self.current_file {
-                            if let Err(e) = self.load_file(path.clone()) {
-                                eprintln!("Error reloading file: {}", e);
-                            }
-                        }
-                        ui.close_menu();
-                    }
-                    
-                    ui.separator();
-                    
-                    if ui.button("Export Filtered...").clicked() {
-                        if !self.filtered_entries.is_empty() {
-                            let content: String = self.filtered_entries
-                                .iter()
-                                .map(|&idx| self.entries[idx].raw_line.as_str())
-                                .collect::<Vec<_>>()
-                                .join("\n");
-                            
-                            let default_name = self.current_file
-                                .as_ref()
-                                .and_then(|p| p.file_name())
-                                .and_then(|n| n.to_str())
-                                .map(|n| format!("{}_filtered.log", n))
-                                .unwrap_or_else(|| "export.log".to_string());
-                            
-                            let export_path = self.current_directory.join(&default_name);
-                            if let Err(e) = fs::write(&export_path, content) {
-                                eprintln!("Error exporting: {}", e);
-                            } else {
-                                eprintln!("Exported to: {}", export_path.display());
-                            }
-                        }
-                        ui.close_menu();
-                    }
-                });
-                
-                ui.menu_button("View", |ui| {
-                    ui.checkbox(&mut self.show_search, "Show Search");
-                    ui.checkbox(&mut self.show_config, "Show Configuration");
-                });
-                
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("🔍").clicked() {
-                        self.show_search = !self.show_search;
-                        if self.show_search {
-                            self.focus_search = true;
-                        }
-                    }
-                    if ui.button("⚙️").clicked() {
-                        self.show_config = !self.show_config;
-                    }
-                });
-            });
-        });
+        // Modern UI Layout
         
-        // Control panel
-        egui::TopBottomPanel::top("controls").show(ctx, |ui| {
+        // 1. Top Header
+        egui::TopBottomPanel::top("header").show(ctx, |ui| {
+            ui.add_space(4.0);
             ui.horizontal(|ui| {
-                // File open button with icon
-                if ui.button("📁 Open File").clicked() {
+                ui.heading("Log Viewer");
+                
+                ui.add_space(20.0);
+                
+                // File Controls
+                if ui.button("📁 Open").clicked() {
                     if let Some(path) = rfd::FileDialog::new()
                         .add_filter("Log files", &["log", "txt"])
                         .pick_file()
@@ -347,283 +259,232 @@ impl eframe::App for LogViewerApp {
                     }
                 }
                 
-                ui.separator();
+                if ui.button("🔄 Reload").clicked() {
+                    if let Some(ref path) = self.current_file {
+                        if let Err(e) = self.load_file(path.clone()) {
+                            eprintln!("Error reloading file: {}", e);
+                        }
+                    }
+                }
                 
-                // File path display
-                ui.label("File:");
+                // Breadcrumb / File Info
+                ui.add_space(20.0);
                 if let Some(ref path) = self.current_file {
-                    ui.label(path.display().to_string());
+                    ui.label(egui::RichText::new(path.file_name().unwrap_or_default().to_string_lossy()).strong());
+                    
+                    // File Size
+                    if let Ok(metadata) = fs::metadata(path) {
+                        let size_mb = metadata.len() as f64 / 1_000_000.0;
+                        ui.label(format!("({:.2} MB)", size_mb));
+                    }
                 } else {
                     ui.label("No file loaded");
                 }
                 
-                ui.separator();
-                
-                // Tail Log toggle with better styling
-                ui.checkbox(&mut self.tail_log, "Tail Log");
-                if self.tail_log != self.config.tail_log {
-                    self.config.tail_log = self.tail_log;
-                    if self.tail_log {
-                        if let Some(ref path) = self.current_file {
-                            self.file_watcher.watch_file(path.clone()).ok();
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    // Sidebar Toggle
+                    let sidebar_btn = ui.button(if self.show_sidebar { "Sidebar ⏵" } else { "Sidebar ⏴" });
+                    if sidebar_btn.clicked() {
+                        self.show_sidebar = !self.show_sidebar;
+                    }
+                    
+                    ui.add_space(10.0);
+                    
+                    // Search Toggle
+                    let search_btn = ui.add(egui::Button::new("🔍 Search").selected(self.show_search));
+                    if search_btn.clicked() {
+                        self.show_search = !self.show_search;
+                        if self.show_search {
+                            self.focus_search = true;
                         }
-                    } else {
-                        self.file_watcher.stop();
                     }
-                }
-                
-                // Scroll to End toggle
-                ui.checkbox(&mut self.scroll_to_end, "Scroll to End");
-                if self.scroll_to_end != self.config.scroll_to_end {
-                    self.config.scroll_to_end = self.scroll_to_end;
-                }
-                
-                ui.separator();
-                
-                // Multi-select filter checkboxes
-                ui.label("Filter:");
-                let mut filter_changed = false;
-                
-                let mut info_enabled = self.enabled_levels.contains(&LogLevel::Info);
-                if ui.checkbox(&mut info_enabled, "Info").changed() {
-                    if info_enabled {
-                        self.enabled_levels.insert(LogLevel::Info);
-                    } else {
-                        self.enabled_levels.remove(&LogLevel::Info);
-                    }
-                    filter_changed = true;
-                }
-                
-                let mut warn_enabled = self.enabled_levels.contains(&LogLevel::Warn);
-                if ui.checkbox(&mut warn_enabled, "Warn").changed() {
-                    if warn_enabled {
-                        self.enabled_levels.insert(LogLevel::Warn);
-                    } else {
-                        self.enabled_levels.remove(&LogLevel::Warn);
-                    }
-                    filter_changed = true;
-                }
-                
-                let mut error_enabled = self.enabled_levels.contains(&LogLevel::Error);
-                if ui.checkbox(&mut error_enabled, "Error").changed() {
-                    if error_enabled {
-                        self.enabled_levels.insert(LogLevel::Error);
-                    } else {
-                        self.enabled_levels.remove(&LogLevel::Error);
-                    }
-                    filter_changed = true;
-                }
-                
-                let mut debug_enabled = self.enabled_levels.contains(&LogLevel::Debug);
-                if ui.checkbox(&mut debug_enabled, "Debug").changed() {
-                    if debug_enabled {
-                        self.enabled_levels.insert(LogLevel::Debug);
-                    } else {
-                        self.enabled_levels.remove(&LogLevel::Debug);
-                    }
-                    filter_changed = true;
-                }
-                
-                if filter_changed {
-                    self.apply_filters();
-                }
-                
-                ui.separator();
-                
-                ui.label(format!("Lines: {}", self.filtered_entries.len()));
-                if let Some(ref path) = self.current_file {
-                    if let Ok(metadata) = fs::metadata(path) {
-                        let size_mb = metadata.len() as f64 / 1_000_000.0;
-                        ui.label(format!("Size: {:.2} MB", size_mb));
-                    }
-                }
+                });
             });
+            ui.add_space(4.0);
         });
-        
-        
-        // Configuration panel
-        if self.show_config {
-            egui::SidePanel::left("config_panel").show(ctx, |ui| {
-                ui.heading("Color Configuration");
-                ui.separator();
-                
-                ui.label("Log Level Colors:");
-                
-                ui.horizontal(|ui| {
-                    let mut rgb = [
-                        self.config.color_palette.info.r() as f32 / 255.0,
-                        self.config.color_palette.info.g() as f32 / 255.0,
-                        self.config.color_palette.info.b() as f32 / 255.0,
-                    ];
-                    ui.color_edit_button_rgb(&mut rgb);
-                    self.config.color_palette.info = egui::Color32::from_rgb(
-                        (rgb[0] * 255.0) as u8,
-                        (rgb[1] * 255.0) as u8,
-                        (rgb[2] * 255.0) as u8,
-                    );
-                    ui.label("Info");
-                });
-                
-                ui.horizontal(|ui| {
-                    let mut rgb = [
-                        self.config.color_palette.warn.r() as f32 / 255.0,
-                        self.config.color_palette.warn.g() as f32 / 255.0,
-                        self.config.color_palette.warn.b() as f32 / 255.0,
-                    ];
-                    ui.color_edit_button_rgb(&mut rgb);
-                    self.config.color_palette.warn = egui::Color32::from_rgb(
-                        (rgb[0] * 255.0) as u8,
-                        (rgb[1] * 255.0) as u8,
-                        (rgb[2] * 255.0) as u8,
-                    );
-                    ui.label("Warn");
-                });
-                
-                ui.horizontal(|ui| {
-                    let mut rgb = [
-                        self.config.color_palette.error.r() as f32 / 255.0,
-                        self.config.color_palette.error.g() as f32 / 255.0,
-                        self.config.color_palette.error.b() as f32 / 255.0,
-                    ];
-                    ui.color_edit_button_rgb(&mut rgb);
-                    self.config.color_palette.error = egui::Color32::from_rgb(
-                        (rgb[0] * 255.0) as u8,
-                        (rgb[1] * 255.0) as u8,
-                        (rgb[2] * 255.0) as u8,
-                    );
-                    ui.label("Error");
-                });
-                
-                ui.horizontal(|ui| {
-                    let mut rgb = [
-                        self.config.color_palette.debug.r() as f32 / 255.0,
-                        self.config.color_palette.debug.g() as f32 / 255.0,
-                        self.config.color_palette.debug.b() as f32 / 255.0,
-                    ];
-                    ui.color_edit_button_rgb(&mut rgb);
-                    self.config.color_palette.debug = egui::Color32::from_rgb(
-                        (rgb[0] * 255.0) as u8,
-                        (rgb[1] * 255.0) as u8,
-                        (rgb[2] * 255.0) as u8,
-                    );
-                    ui.label("Debug");
-                });
-                
-                ui.horizontal(|ui| {
-                    let mut rgb = [
-                        self.config.color_palette.trace.r() as f32 / 255.0,
-                        self.config.color_palette.trace.g() as f32 / 255.0,
-                        self.config.color_palette.trace.b() as f32 / 255.0,
-                    ];
-                    ui.color_edit_button_rgb(&mut rgb);
-                    self.config.color_palette.trace = egui::Color32::from_rgb(
-                        (rgb[0] * 255.0) as u8,
-                        (rgb[1] * 255.0) as u8,
-                        (rgb[2] * 255.0) as u8,
-                    );
-                    ui.label("Trace");
-                });
-                
-                ui.horizontal(|ui| {
-                    let mut rgb = [
-                        self.config.color_palette.default.r() as f32 / 255.0,
-                        self.config.color_palette.default.g() as f32 / 255.0,
-                        self.config.color_palette.default.b() as f32 / 255.0,
-                    ];
-                    ui.color_edit_button_rgb(&mut rgb);
-                    self.config.color_palette.default = egui::Color32::from_rgb(
-                        (rgb[0] * 255.0) as u8,
-                        (rgb[1] * 255.0) as u8,
-                        (rgb[2] * 255.0) as u8,
-                    );
-                    ui.label("Default");
-                });
 
-                ui.separator();
-                ui.heading("Appearance");
-                
+        // 2. Search Bar (Floating / Top)
+        if self.show_search {
+            egui::TopBottomPanel::top("search_bar").show(ctx, |ui| {
+                ui.add_space(4.0);
                 ui.horizontal(|ui| {
-                    ui.label("Theme:");
-                    if ui.radio_value(&mut self.config.theme, Theme::Dark, "Dark").clicked() {
-                        self.config.color_palette = ColorPalette::dark();
+                    ui.label("🔍");
+                    let response = ui.add(egui::TextEdit::singleline(&mut self.search.query).desired_width(300.0));
+                    
+                    // Handle focus request
+                    if self.focus_search {
+                        response.request_focus();
+                        self.focus_search = false;
                     }
-                    if ui.radio_value(&mut self.config.theme, Theme::Light, "Light").clicked() {
-                        self.config.color_palette = ColorPalette::light();
-                    }
-                });
-
-                ui.horizontal(|ui| {
-                    ui.label("Font Size:");
-                    ui.add(egui::DragValue::new(&mut self.config.font_size).speed(0.5).clamp_range(8.0..=30.0));
-                });
-            });
-        }
-        
-        // File dialog
-        if self.show_file_dialog {
-            egui::Window::new("Open Log File")
-                .collapsible(false)
-                .resizable(true)
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label("Directory:");
-                        ui.label(self.current_directory.display().to_string());
-                        if ui.button("⬆").clicked() {
-                            if let Some(parent) = self.current_directory.parent() {
-                                self.current_directory = parent.to_path_buf();
-                                self.file_dialog_files = Self::list_files(&self.current_directory);
-                            }
+                    
+                    // Handle Enter/Shift+Enter shortcuts
+                    if (response.has_focus() || response.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        if ui.input(|i| i.modifiers.shift) {
+                            self.search.prev_match();
+                        } else {
+                            self.search.next_match();
                         }
-                    });
+                        self.scroll_to_match = true;
+                        response.request_focus(); // Keep focus
+                    }
+                    
+                    if response.changed() {
+                        self.search.update_search(&self.entries);
+                        // Navigate to first match when typing
+                        if self.search.matches.len() > 0 {
+                            self.search.current_match = Some(0);
+                            self.scroll_to_match = true;
+                        }
+                    }
+                    
+                    if ui.button("Prev").clicked() {
+                        self.search.prev_match();
+                        self.scroll_to_match = true;
+                    }
+                    
+                    if ui.button("Next").clicked() {
+                        self.search.next_match();
+                        self.scroll_to_match = true;
+                    }
+                    
+                    if !self.search.matches.is_empty() {
+                        if let Some(idx) = self.search.current_match {
+                            ui.label(format!("{}/{}", idx + 1, self.search.matches.len()));
+                        } else {
+                            ui.label(format!("{} matches", self.search.matches.len()));
+                        }
+                    } else if !self.search.query.is_empty() {
+                        ui.label("No matches");
+                    }
                     
                     ui.separator();
                     
-                    ui.label("Or enter file path:");
-                    ui.horizontal(|ui| {
-                        ui.text_edit_singleline(&mut self.file_path_input);
-                        if ui.button("Load").clicked() {
-                            let path = PathBuf::from(&self.file_path_input);
-                            if path.exists() {
-                                if let Err(e) = self.load_file(path.clone()) {
-                                    eprintln!("Error loading file: {}", e);
-                                } else {
-                                    self.show_file_dialog = false;
+                    ui.checkbox(&mut self.search.case_sensitive, "Aa").on_hover_text("Case Sensitive");
+                    ui.checkbox(&mut self.search.use_regex, ".*").on_hover_text("Regex");
+                });
+                ui.add_space(4.0);
+            });
+        }
+
+        // 3. Right Sidebar (Control Center)
+        if self.show_sidebar {
+            egui::SidePanel::right("sidebar")
+                .resizable(true)
+                .default_width(250.0)
+                .show(ctx, |ui| {
+                    ui.add_space(10.0);
+                    ui.heading("Control Center");
+                    ui.add_space(10.0);
+                    
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        // Section: Filters
+                        ui.collapsing("Filters", |ui| {
+                            ui.label("Log Levels:");
+                            let mut filter_changed = false;
+                            
+                            let levels = [
+                                (LogLevel::Info, "Info", self.config.color_palette.info),
+                                (LogLevel::Warn, "Warn", self.config.color_palette.warn),
+                                (LogLevel::Error, "Error", self.config.color_palette.error),
+                                (LogLevel::Debug, "Debug", self.config.color_palette.debug),
+                            ];
+                            
+                            for (level, label, color) in levels {
+                                let mut enabled = self.enabled_levels.contains(&level);
+                                if ui.checkbox(&mut enabled, egui::RichText::new(label).color(color)).changed() {
+                                    if enabled {
+                                        self.enabled_levels.insert(level);
+                                    } else {
+                                        self.enabled_levels.remove(&level);
+                                    }
+                                    filter_changed = true;
                                 }
                             }
-                        }
-                    });
-                    
-                    ui.separator();
-                    
-                    ui.label("Files in current directory:");
-                    let mut file_to_load: Option<PathBuf> = None;
-                    egui::ScrollArea::vertical().show(ui, |ui| {
-                        for file in &self.file_dialog_files {
-                            let file_name = file.file_name().and_then(|n| n.to_str()).unwrap_or("?");
-                            if ui.button(file_name).clicked() {
-                                file_to_load = Some(file.clone());
+                            
+                            if filter_changed {
+                                self.apply_filters();
                             }
-                        }
+                            
+                            ui.add_space(5.0);
+                            ui.label(format!("Showing: {} / {} lines", self.filtered_entries.len(), self.entries.len()));
+                        });
+                        
+                        ui.separator();
+                        
+                        // Section: View Options
+                        ui.collapsing("View Options", |ui| {
+                            // Tail Log
+                            ui.checkbox(&mut self.tail_log, "Tail Log (Auto-refresh)");
+                            if self.tail_log != self.config.tail_log {
+                                self.config.tail_log = self.tail_log;
+                                if self.tail_log {
+                                    if let Some(ref path) = self.current_file {
+                                        self.file_watcher.watch_file(path.clone()).ok();
+                                    }
+                                } else {
+                                    self.file_watcher.stop();
+                                }
+                            }
+                            
+                            // Scroll to End
+                            ui.checkbox(&mut self.scroll_to_end, "Auto-scroll to End");
+                            if self.scroll_to_end != self.config.scroll_to_end {
+                                self.config.scroll_to_end = self.scroll_to_end;
+                            }
+                        });
+                        
+                        ui.separator();
+                        
+                        // Section: Appearance
+                        ui.collapsing("Appearance", |ui| {
+                            ui.label("Theme:");
+                            ui.horizontal(|ui| {
+                                if ui.selectable_label(self.config.theme == Theme::Dark, "Dark").clicked() {
+                                    self.config.theme = Theme::Dark;
+                                    self.config.color_palette = ColorPalette::dark();
+                                }
+                                if ui.selectable_label(self.config.theme == Theme::Light, "Light").clicked() {
+                                    self.config.theme = Theme::Light;
+                                    self.config.color_palette = ColorPalette::light();
+                                }
+                            });
+                            
+                            ui.add_space(5.0);
+                            ui.label("Font Size:");
+                            ui.add(egui::DragValue::new(&mut self.config.font_size).speed(0.5).clamp_range(8.0..=30.0));
+                            
+                            ui.add_space(5.0);
+                            if ui.button("Export Filtered Logs").clicked() {
+                                if !self.filtered_entries.is_empty() {
+                                    let content: String = self.filtered_entries
+                                        .iter()
+                                        .map(|&idx| self.entries[idx].raw_line.as_str())
+                                        .collect::<Vec<_>>()
+                                        .join("\n");
+                                    
+                                    let default_name = self.current_file
+                                        .as_ref()
+                                        .and_then(|p| p.file_name())
+                                        .and_then(|n| n.to_str())
+                                        .map(|n| format!("{}_filtered.log", n))
+                                        .unwrap_or_else(|| "export.log".to_string());
+                                    
+                                    let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                                    let export_path = current_dir.join(&default_name);
+                                    if let Err(e) = fs::write(&export_path, content) {
+                                        eprintln!("Error exporting: {}", e);
+                                    } else {
+                                        eprintln!("Exported to: {}", export_path.display());
+                                    }
+                                }
+                            }
+                        });
                     });
-                    if let Some(path) = file_to_load {
-                        if let Err(e) = self.load_file(path) {
-                            eprintln!("Error loading file: {}", e);
-                        } else {
-                            self.show_file_dialog = false;
-                        }
-                    }
-                    
-                    ui.separator();
-                    if ui.button("Cancel").clicked() {
-                        self.show_file_dialog = false;
-                    }
                 });
         }
-        
-        // Main content area
+
+        // 4. Central Panel (Log View)
         egui::CentralPanel::default().show(ctx, |ui| {
-            use egui::*;
-            
             ScrollArea::vertical()
                 .auto_shrink([false; 2])
                 .show(ui, |ui| {
@@ -631,16 +492,13 @@ impl eframe::App for LogViewerApp {
                     
                     if self.entries.is_empty() {
                         ui.centered_and_justified(|ui| {
-                            ui.label("No log file loaded. Use File > Open File to load a log file.");
+                            ui.label("No log file loaded. Use 'Open' in the top bar to load a log file.");
                         });
                     } else if self.filtered_entries.is_empty() {
                         ui.centered_and_justified(|ui| {
                             ui.label("No entries match the current filters.");
                         });
                     } else {
-                        // Track if we need to scroll to a match
-                        let mut target_scroll_idx = None;
-                        
                         // Chunk size for rendering
                         const CHUNK_SIZE: usize = 100;
                         
@@ -658,7 +516,6 @@ impl eframe::App for LogViewerApp {
                                 let is_current_match = self.search.is_current_match(entry_idx);
                                 
                                 if is_current_match && self.scroll_to_match {
-                                    target_scroll_idx = Some(entry_idx);
                                     self.scroll_to_match = false;
                                     chunk_contains_match = true;
                                 }
@@ -747,22 +604,6 @@ impl eframe::App for LogViewerApp {
                         // Add a spacer at the bottom to ensure we can scroll to the very end
                         ui.allocate_space(egui::vec2(ui.available_width(), 0.0));
                         
-                        // Scroll to match if requested
-                        if let Some(idx) = target_scroll_idx {
-                            // Calculate approximate position or use scroll_to_cursor if visible
-                            // For virtual scrolling, we need to be careful. 
-                            // Since we are iterating all filtered entries, we can use scroll_to_cursor on the specific item if we tracked it.
-                            // But we didn't track the response of the specific item above.
-                            // Let's rely on the fact that we just rendered it.
-                            // Actually, scroll_to_cursor works on the *last* added widget if no ID is provided, which is wrong here.
-                            // We need to scroll to the specific line.
-                            // A better approach for virtual scrolling is complicated, but since we are rendering ALL filtered entries (not using show_rows),
-                            // we can just use scroll_to_cursor(Align::Center) *during* the loop.
-                            
-                            // Wait, the previous loop renders EVERYTHING. It's not virtualized by show_rows, but by ScrollArea clipping.
-                            // So we can just set a flag to scroll to the *next* rendered item that matches.
-                        }
-                        
                         // Auto-scroll to end on first load or refresh - must be after all content is rendered
                         if self.auto_scroll_frames > 0 && self.scroll_to_end && !self.filtered_entries.is_empty() {
                             // Scroll to the very bottom
@@ -774,89 +615,7 @@ impl eframe::App for LogViewerApp {
                 });
         });
         
-        // Search panel at the bottom - this will automatically resize the content area
-        if self.show_search {
-            egui::TopBottomPanel::bottom("search_panel")
-                .resizable(true)
-                .default_height(150.0)
-                .show(ctx, |ui| {
-                ui.heading("Search");
-                ui.separator();
-                
-                ui.horizontal(|ui| {
-                    let response = ui.text_edit_singleline(&mut self.search.query);
-                    
-                    // Handle focus request
-                    if self.focus_search {
-                        response.request_focus();
-                        self.focus_search = false;
-                    }
-                    
-                    // Handle Enter/Shift+Enter shortcuts
-                    // We check if the response has focus OR if it lost focus (which happens when Enter is pressed in singleline)
-                    if (response.has_focus() || response.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                        if ui.input(|i| i.modifiers.shift) {
-                            self.search.prev_match();
-                        } else {
-                            self.search.next_match();
-                        }
-                        self.scroll_to_match = true;
-                        response.request_focus(); // Keep focus
-                    }
-                    
-                    if response.changed() {
-                        self.search.update_search(&self.entries);
-                        // Navigate to first match when typing
-                        if !self.search.matches.is_empty() {
-                            self.search.current_match = Some(0);
-                            self.scroll_to_match = true;
-                        } else {
-                            self.search.current_match = None;
-                        }
-                        self.apply_filters();
-                    }
-                    
-                    // Styled buttons with icons
-                    if ui.button("⬆ Prev").clicked() {
-                        self.search.prev_match();
-                        self.scroll_to_match = true;
-                    }
-                    if ui.button("⬇ Next").clicked() {
-                        self.search.next_match();
-                        self.scroll_to_match = true;
-                    }
-                });
-                
-                ui.horizontal(|ui| {
-                    if ui.checkbox(&mut self.search.case_sensitive, "Case Sensitive").changed() {
-                        self.search.update_search(&self.entries);
-                        if !self.search.matches.is_empty() {
-                            self.search.current_match = Some(0);
-                            self.scroll_to_match = true;
-                        }
-                        self.apply_filters();
-                    }
-                    if ui.checkbox(&mut self.search.use_regex, "Use Regex").changed() {
-                        self.search.update_search(&self.entries);
-                        if !self.search.matches.is_empty() {
-                            self.search.current_match = Some(0);
-                            self.scroll_to_match = true;
-                        }
-                        self.apply_filters();
-                    }
-                    if ui.checkbox(&mut self.search.show_only_matches, "Show only matched lines").changed() {
-                        self.apply_filters();
-                    }
-                });
-                
-                if !self.search.matches.is_empty() {
-                    ui.label(format!("Found {} matches", self.search.matches.len()));
-                    if let Some(current) = self.search.current_match {
-                        ui.label(format!("Match {} of {}", current + 1, self.search.matches.len()));
-                    }
-                }
-            });
-        }
+
         
         ctx.request_repaint();
     }
