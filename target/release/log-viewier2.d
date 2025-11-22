@@ -1,1 +1,0 @@
-/Users/jose/projects/log-viewier2/target/release/log-viewier2: /Users/jose/projects/log-viewier2/src/app.rs /Users/jose/projects/log-viewier2/src/config.rs /Users/jose/projects/log-viewier2/src/file_watcher.rs /Users/jose/projects/log-viewier2/src/log_parser.rs /Users/jose/projects/log-viewier2/src/main.rs /Users/jose/projects/log-viewier2/src/search.rs

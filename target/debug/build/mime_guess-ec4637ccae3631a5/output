@@ -1,1 +1,0 @@
-cargo:rustc-env=MIME_TYPES_GENERATED_PATH=/Users/jose/projects/log-viewier2/target/debug/build/mime_guess-ec4637ccae3631a5/out/mime_types_generated.rs
