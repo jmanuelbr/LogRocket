@@ -30,7 +30,9 @@ pub struct LogParser {
 impl LogParser {
     pub fn new() -> Self {
         // Error log format: DD.MM.YYYY HH:MM:SS.mmm *LEVEL* [thread] class message
-        let error_log_pattern = r"^(\d{2}\.\d{2}\.\d{4}\s+\d{2}:\d{2}:\d{2}\.\d{3})\s+\*(\w+)\*\s+\[([^\]]+)\]\s+(.+)$";
+        // We capture the prefix up to the level, and then capture the rest of the line to parse thread manualy
+        // because thread names can contain nested brackets like [TarMK ... [...]]
+        let error_log_pattern = r"^(\d{2}\.\d{2}\.\d{4}\s+\d{2}:\d{2}:\d{2}\.\d{3})\s+\*(\w+)\*\s+(.+)$";
         
         // Access log format: IP - user DD/MMM/YYYY:HH:MM:SS +TZ "METHOD PATH HTTP/VERSION" STATUS SIZE "referer" "user-agent"
         let access_log_pattern = r"^([^\s]+)\s+-\s+(\S+)\s+(\d{2}/\w{3}/\d{4}:\d{2}:\d{2}:\d{2}\s+[+-]\d{4})\s+(.+)$";
@@ -46,13 +48,50 @@ impl LogParser {
         if let Some(caps) = self.error_log_regex.captures(line) {
             let timestamp = caps.get(1).map(|m| m.as_str().to_string());
             let level_str = caps.get(2).map(|m| m.as_str()).unwrap_or("");
-            let thread = caps.get(3).map(|m| m.as_str().to_string());
-            let rest = caps.get(4).map(|m| m.as_str()).unwrap_or("");
+            let rest = caps.get(3).map(|m| m.as_str()).unwrap_or("");
+            
+            // Manual parsing for thread (handling nested brackets)
+            let mut thread = None;
+            let mut class_and_message = rest;
+            
+            if rest.starts_with('[') {
+                let mut bracket_count = 0;
+                let mut end_index = 0;
+                let mut found_end = false;
+                
+                for (i, c) in rest.char_indices() {
+                    if c == '[' {
+                        bracket_count += 1;
+                    } else if c == ']' {
+                        bracket_count -= 1;
+                        if bracket_count == 0 {
+                            end_index = i;
+                            found_end = true;
+                            break;
+                        }
+                    }
+                }
+                
+                if found_end {
+                    // Extract thread content (excluding outer brackets)
+                    if end_index > 1 {
+                        thread = Some(rest[1..end_index].to_string());
+                    }
+                    // The rest is class and message (skip the closing bracket and following space)
+                    if end_index + 1 < rest.len() {
+                        class_and_message = &rest[end_index + 1..];
+                    } else {
+                        class_and_message = "";
+                    }
+                }
+            }
+            
+            let class_and_message = class_and_message.trim();
             
             // Extract class and message
-            let parts: Vec<&str> = rest.splitn(2, ' ').collect();
+            let parts: Vec<&str> = class_and_message.splitn(2, ' ').collect();
             let class = parts.get(0).map(|s| s.to_string());
-            let message = parts.get(1).map(|s| s.to_string()).unwrap_or_else(|| rest.to_string());
+            let message = parts.get(1).map(|s| s.to_string()).unwrap_or_else(|| class_and_message.to_string());
             
             let level = match level_str.to_uppercase().as_str() {
                 "INFO" => LogLevel::Info,

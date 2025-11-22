@@ -4,7 +4,7 @@ use std::fs;
 use std::io::{self, BufRead, BufReader, Read, Seek};
 use crate::log_parser::{LogParser, LogEntry, LogLevel};
 use crate::file_watcher::FileWatcher;
-use crate::config::{AppConfig, ColorPalette};
+use crate::config::{AppConfig, ColorPalette, Theme};
 use crate::search::SearchState;
 
 pub struct LogViewerApp {
@@ -19,7 +19,7 @@ pub struct LogViewerApp {
     
     tail_log: bool,
     scroll_to_end: bool,
-    auto_scroll: bool,
+    auto_scroll_frames: usize,
     
     scroll_offset: f32,
     last_file_size: u64,
@@ -31,6 +31,10 @@ pub struct LogViewerApp {
     show_file_dialog: bool,
     current_directory: PathBuf,
     file_dialog_files: Vec<PathBuf>,
+    
+    // New state fields
+    focus_search: bool,
+    scroll_to_match: bool,
 }
 
 impl LogViewerApp {
@@ -58,7 +62,8 @@ impl LogViewerApp {
         
         self.entries = self.parser.parse_file(&content);
         self.current_file = Some(path.clone());
-        self.auto_scroll = true;
+        self.current_file = Some(path.clone());
+        self.auto_scroll_frames = 5; // Force scroll for 5 frames to ensure layout settles
         self.scroll_offset = f32::MAX;
         
         // Start watching the file
@@ -109,7 +114,7 @@ impl LogViewerApp {
                                 self.last_file_size = new_size;
                                 
                                 if self.scroll_to_end {
-                                    self.auto_scroll = true;
+                                    self.auto_scroll_frames = 3;
                                 }
                             }
                         }
@@ -172,7 +177,7 @@ impl Default for LogViewerApp {
             filtered_entries: Vec::new(),
             tail_log: true,
             scroll_to_end: true,
-            auto_scroll: false,
+            auto_scroll_frames: 0,
             scroll_offset: 0.0,
             last_file_size: 0,
             show_search: false,
@@ -191,6 +196,8 @@ impl Default for LogViewerApp {
             show_file_dialog: false,
             current_directory: current_dir.clone(),
             file_dialog_files: Self::list_files(&current_dir),
+            focus_search: false,
+            scroll_to_match: false,
         }
     }
 }
@@ -223,13 +230,32 @@ impl eframe::App for LogViewerApp {
             if input.key_pressed(egui::Key::F) && 
                (input.modifiers.command || input.modifiers.ctrl) {
                 self.show_search = !self.show_search;
+                if self.show_search {
+                    self.focus_search = true;
+                }
             }
             
             // ESC to close search
             if input.key_pressed(egui::Key::Escape) && self.show_search {
                 self.show_search = false;
             }
+
+            // Font size shortcuts
+            if input.modifiers.command || input.modifiers.ctrl {
+                if input.key_pressed(egui::Key::ArrowUp) {
+                    self.config.font_size = (self.config.font_size + 1.0).min(30.0);
+                }
+                if input.key_pressed(egui::Key::ArrowDown) {
+                    self.config.font_size = (self.config.font_size - 1.0).max(8.0);
+                }
+            }
         });
+        
+        // Apply theme
+        match self.config.theme {
+            Theme::Dark => ctx.set_visuals(egui::Visuals::dark()),
+            Theme::Light => ctx.set_visuals(egui::Visuals::light()),
+        }
         
         // Check for file updates
         self.check_file_updates();
@@ -295,6 +321,9 @@ impl eframe::App for LogViewerApp {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button("🔍").clicked() {
                         self.show_search = !self.show_search;
+                        if self.show_search {
+                            self.focus_search = true;
+                        }
                     }
                     if ui.button("⚙️").clicked() {
                         self.show_config = !self.show_config;
@@ -509,6 +538,24 @@ impl eframe::App for LogViewerApp {
                     );
                     ui.label("Default");
                 });
+
+                ui.separator();
+                ui.heading("Appearance");
+                
+                ui.horizontal(|ui| {
+                    ui.label("Theme:");
+                    if ui.radio_value(&mut self.config.theme, Theme::Dark, "Dark").clicked() {
+                        self.config.color_palette = ColorPalette::dark();
+                    }
+                    if ui.radio_value(&mut self.config.theme, Theme::Light, "Light").clicked() {
+                        self.config.color_palette = ColorPalette::light();
+                    }
+                });
+
+                ui.horizontal(|ui| {
+                    ui.label("Font Size:");
+                    ui.add(egui::DragValue::new(&mut self.config.font_size).speed(0.5).clamp_range(8.0..=30.0));
+                });
             });
         }
         
@@ -580,6 +627,8 @@ impl eframe::App for LogViewerApp {
             ScrollArea::vertical()
                 .auto_shrink([false; 2])
                 .show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.y = 0.0; // Zero spacing between lines
+                    
                     if self.entries.is_empty() {
                         ui.centered_and_justified(|ui| {
                             ui.label("No log file loaded. Use File > Open File to load a log file.");
@@ -590,59 +639,136 @@ impl eframe::App for LogViewerApp {
                         });
                     } else {
                         // Track if we need to scroll to a match
-                        let mut should_scroll_to_match = false;
+                        let mut target_scroll_idx = None;
                         
-                        // Render all filtered entries - egui's ScrollArea handles virtual scrolling efficiently
-                        for &entry_idx in &self.filtered_entries {
-                            let entry = &self.entries[entry_idx];
-                            let color = self.get_color_for_level(&entry.level);
+                        // Chunk size for rendering
+                        const CHUNK_SIZE: usize = 100;
+                        
+                        // Render filtered entries in chunks
+                        for chunk in self.filtered_entries.chunks(CHUNK_SIZE) {
+                            let mut chunk_text = String::new();
+                            let mut job = egui::text::LayoutJob::default();
+                            let mut chunk_contains_match = false;
                             
-                            let is_search_match = self.search.is_match(entry_idx);
-                            let is_current_match = self.search.is_current_match(entry_idx);
-                            
-                            // Track if we need to scroll to this match
-                            if is_current_match && !self.search.query.is_empty() {
-                                should_scroll_to_match = true;
-                            }
-                            
-                            // Render multi-line entries with proper color for all lines
-                            let lines: Vec<&str> = entry.raw_line.lines().collect();
-                            for (line_idx, line) in lines.iter().enumerate() {
-                                ui.horizontal_wrapped(|ui| {
-                                    // Show line number only on first line
+                            for &entry_idx in chunk {
+                                let entry = &self.entries[entry_idx];
+                                let color = self.get_color_for_level(&entry.level);
+                                
+                                let is_search_match = self.search.is_match(entry_idx);
+                                let is_current_match = self.search.is_current_match(entry_idx);
+                                
+                                if is_current_match && self.scroll_to_match {
+                                    target_scroll_idx = Some(entry_idx);
+                                    self.scroll_to_match = false;
+                                    chunk_contains_match = true;
+                                }
+                                
+                                let lines: Vec<&str> = entry.raw_line.lines().collect();
+                                for (line_idx, line) in lines.iter().enumerate() {
+                                    // Line number and match icon
                                     if line_idx == 0 {
-                                        let line_num_text = if is_search_match {
-                                            format!("{:6} 🔍", entry.line_number)
+                                        let (line_num_text, text_color) = if is_current_match {
+                                            (format!("{:6} 🔍 ", entry.line_number), Color32::YELLOW)
+                                        } else if is_search_match {
+                                            (format!("{:6} 🔍 ", entry.line_number), Color32::GRAY)
                                         } else {
-                                            format!("{:6}", entry.line_number)
+                                            (format!("{:6}   ", entry.line_number), Color32::GRAY)
                                         };
-                                        ui.label(
-                                            RichText::new(line_num_text)
-                                                .color(Color32::GRAY)
+                                        
+                                        job.append(
+                                            &line_num_text,
+                                            0.0,
+                                            egui::TextFormat {
+                                                font_id: egui::FontId::monospace(self.config.font_size),
+                                                color: text_color,
+                                                ..Default::default()
+                                            },
                                         );
+                                        chunk_text.push_str(&line_num_text);
                                     } else {
-                                        // Indent continuation lines to align with content
-                                        ui.add_space(70.0); // Match line number width
+                                        // Indentation for continuation lines
+                                        let indent = "         "; // 6 chars + 3 spaces
+                                        job.append(
+                                            indent,
+                                            0.0,
+                                            egui::TextFormat {
+                                                font_id: egui::FontId::monospace(self.config.font_size),
+                                                color: Color32::TRANSPARENT, // Invisible but takes space
+                                                ..Default::default()
+                                            },
+                                        );
+                                        chunk_text.push_str(indent);
                                     }
                                     
-                                    // Use selectable text for copy functionality (Cmd+C)
-                                    // Render line with proper color (all lines in entry get same color)
-                                    let text = RichText::new(*line).color(color);
-                                    ui.selectable_label(false, text);
-                                });
+                                    // Log content
+                                    job.append(
+                                        line,
+                                        0.0,
+                                        egui::TextFormat {
+                                            font_id: egui::FontId::monospace(self.config.font_size),
+                                            color,
+                                            ..Default::default()
+                                        },
+                                    );
+                                    chunk_text.push_str(line);
+                                    
+                                    // Newline
+                                    job.append(
+                                        "\n",
+                                        0.0,
+                                        egui::TextFormat {
+                                            font_id: egui::FontId::monospace(self.config.font_size),
+                                            color: Color32::TRANSPARENT,
+                                            ..Default::default()
+                                        },
+                                    );
+                                    chunk_text.push('\n');
+                                }
+                            }
+                            
+                            // Render the chunk as a single TextEdit
+                            let response = ui.add(
+                                egui::TextEdit::multiline(&mut chunk_text)
+                                    .layouter(&mut |ui, _string, _wrap_width| {
+                                        let mut layout_job = job.clone();
+                                        layout_job.wrap.max_width = ui.available_width();
+                                        ui.fonts(|f| f.layout_job(layout_job))
+                                    })
+                                    .frame(false)
+                                    .desired_width(f32::INFINITY)
+                            );
+                            
+                            // Scroll to this chunk if it contains the match
+                            if chunk_contains_match {
+                                response.scroll_to_me(Some(Align::Center));
                             }
                         }
                         
-                        // Auto-scroll to current match when typing (after all content is rendered)
-                        if should_scroll_to_match && !self.search.query.is_empty() {
-                            ui.scroll_to_cursor(Some(Align::BOTTOM));
+                        // Add a spacer at the bottom to ensure we can scroll to the very end
+                        ui.allocate_space(egui::vec2(ui.available_width(), 0.0));
+                        
+                        // Scroll to match if requested
+                        if let Some(idx) = target_scroll_idx {
+                            // Calculate approximate position or use scroll_to_cursor if visible
+                            // For virtual scrolling, we need to be careful. 
+                            // Since we are iterating all filtered entries, we can use scroll_to_cursor on the specific item if we tracked it.
+                            // But we didn't track the response of the specific item above.
+                            // Let's rely on the fact that we just rendered it.
+                            // Actually, scroll_to_cursor works on the *last* added widget if no ID is provided, which is wrong here.
+                            // We need to scroll to the specific line.
+                            // A better approach for virtual scrolling is complicated, but since we are rendering ALL filtered entries (not using show_rows),
+                            // we can just use scroll_to_cursor(Align::Center) *during* the loop.
+                            
+                            // Wait, the previous loop renders EVERYTHING. It's not virtualized by show_rows, but by ScrollArea clipping.
+                            // So we can just set a flag to scroll to the *next* rendered item that matches.
                         }
                         
                         // Auto-scroll to end on first load or refresh - must be after all content is rendered
-                        if self.auto_scroll && self.scroll_to_end && !self.filtered_entries.is_empty() {
+                        if self.auto_scroll_frames > 0 && self.scroll_to_end && !self.filtered_entries.is_empty() {
                             // Scroll to the very bottom
                             ui.scroll_to_cursor(Some(Align::BOTTOM));
-                            self.auto_scroll = false;
+                            self.auto_scroll_frames -= 1;
+                            ui.ctx().request_repaint(); // Ensure we keep repainting until scroll settles
                         }
                     }
                 });
@@ -659,11 +785,31 @@ impl eframe::App for LogViewerApp {
                 
                 ui.horizontal(|ui| {
                     let response = ui.text_edit_singleline(&mut self.search.query);
+                    
+                    // Handle focus request
+                    if self.focus_search {
+                        response.request_focus();
+                        self.focus_search = false;
+                    }
+                    
+                    // Handle Enter/Shift+Enter shortcuts
+                    // We check if the response has focus OR if it lost focus (which happens when Enter is pressed in singleline)
+                    if (response.has_focus() || response.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        if ui.input(|i| i.modifiers.shift) {
+                            self.search.prev_match();
+                        } else {
+                            self.search.next_match();
+                        }
+                        self.scroll_to_match = true;
+                        response.request_focus(); // Keep focus
+                    }
+                    
                     if response.changed() {
                         self.search.update_search(&self.entries);
                         // Navigate to first match when typing
                         if !self.search.matches.is_empty() {
                             self.search.current_match = Some(0);
+                            self.scroll_to_match = true;
                         } else {
                             self.search.current_match = None;
                         }
@@ -673,9 +819,11 @@ impl eframe::App for LogViewerApp {
                     // Styled buttons with icons
                     if ui.button("⬆ Prev").clicked() {
                         self.search.prev_match();
+                        self.scroll_to_match = true;
                     }
                     if ui.button("⬇ Next").clicked() {
                         self.search.next_match();
+                        self.scroll_to_match = true;
                     }
                 });
                 
@@ -684,6 +832,7 @@ impl eframe::App for LogViewerApp {
                         self.search.update_search(&self.entries);
                         if !self.search.matches.is_empty() {
                             self.search.current_match = Some(0);
+                            self.scroll_to_match = true;
                         }
                         self.apply_filters();
                     }
@@ -691,6 +840,7 @@ impl eframe::App for LogViewerApp {
                         self.search.update_search(&self.entries);
                         if !self.search.matches.is_empty() {
                             self.search.current_match = Some(0);
+                            self.scroll_to_match = true;
                         }
                         self.apply_filters();
                     }
