@@ -34,7 +34,7 @@ pub struct LogViewerApp {
 }
 
 impl LogViewerApp {
-    fn load_file(&mut self, path: PathBuf) -> Result<(), String> {
+    pub fn load_file(&mut self, path: PathBuf) -> Result<(), String> {
         // Read file efficiently
         let file = fs::File::open(&path).map_err(|e| format!("Failed to open file: {}", e))?;
         let metadata = file.metadata().map_err(|e| format!("Failed to read metadata: {}", e))?;
@@ -236,6 +236,20 @@ impl eframe::App for LogViewerApp {
         
         // Check for file updates
         self.check_file_updates();
+        
+        // Handle Drag & Drop (and macOS File Open events)
+        if !ctx.input(|i| i.raw.dropped_files.is_empty()) {
+            let dropped_files = ctx.input(|i| i.raw.dropped_files.clone());
+            if let Some(file) = dropped_files.first() {
+                if let Some(path) = &file.path {
+                    if path.exists() {
+                        if let Err(e) = self.load_file(path.clone()) {
+                            eprintln!("Error loading dropped file: {}", e);
+                        }
+                    }
+                }
+            }
+        }
         
         // Modern UI Layout
         
