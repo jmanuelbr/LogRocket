@@ -1,6 +1,6 @@
-# Log Viewer 2
+# Log Rocket for AEM
 
-A fast, efficient log viewer application written in Rust using egui.
+A fast, efficient log viewer application written in Rust using egui for AEM logs
 
 ## Features
 
