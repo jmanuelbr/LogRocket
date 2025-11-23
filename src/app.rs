@@ -32,6 +32,9 @@ pub struct LogViewerApp {
     focus_search: bool,
     scroll_to_match: bool,
     scroll_to_top: bool,
+    scroll_target_line: Option<usize>, // Line to scroll to
+    target_scroll_offset: Option<f32>, // Calculated Y offset to scroll to
+    wrap_text: bool, // Whether to wrap long lines
 }
 
 impl LogViewerApp {
@@ -203,6 +206,9 @@ impl Default for LogViewerApp {
             focus_search: false,
             scroll_to_match: false,
             scroll_to_top: false,
+            scroll_target_line: None,
+            target_scroll_offset: None,
+            wrap_text: false, // Default: no wrapping, allow horizontal scroll
         }
     }
 }
@@ -323,7 +329,8 @@ impl eframe::App for LogViewerApp {
                 ui.add_space(20.0);
                 
                 // File Controls
-                if ui.button("📁").on_hover_text("Open File").clicked() {
+                let icon_size = 20.0;
+                if ui.add_sized([icon_size, icon_size], egui::Button::new("📁")).on_hover_text("Open File").clicked() {
                     if let Some(path) = rfd::FileDialog::new()
                         .add_filter("Log files", &["log", "txt"])
                         .pick_file()
@@ -334,7 +341,7 @@ impl eframe::App for LogViewerApp {
                     }
                 }
                 
-                if ui.button("🔄").on_hover_text("Reload").clicked() {
+                if ui.add_sized([icon_size, icon_size], egui::Button::new("🔄")).on_hover_text("Reload").clicked() {
                     if let Some(ref path) = self.current_file {
                         if let Err(e) = self.load_file(path.clone()) {
                             eprintln!("Error reloading file: {}", e);
@@ -359,7 +366,7 @@ impl eframe::App for LogViewerApp {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     // Sidebar Toggle
                     let sidebar_icon = if self.show_sidebar { "⏵" } else { "⏴" };
-                    let sidebar_btn = ui.button(sidebar_icon).on_hover_text("Toggle Sidebar");
+                    let sidebar_btn = ui.add_sized([icon_size, icon_size], egui::Button::new(sidebar_icon)).on_hover_text("Toggle Sidebar");
                     if sidebar_btn.clicked() {
                         self.show_sidebar = !self.show_sidebar;
                     }
@@ -367,7 +374,7 @@ impl eframe::App for LogViewerApp {
                     ui.add_space(10.0);
                     
                     // Search Toggle
-                    let search_btn = ui.add(egui::Button::new("🔍").selected(self.show_search)).on_hover_text("Toggle Search");
+                    let search_btn = ui.add_sized([icon_size, icon_size], egui::Button::new("🔍").selected(self.show_search)).on_hover_text("Toggle Search");
                     if search_btn.clicked() {
                         self.show_search = !self.show_search;
                         if self.show_search {
@@ -400,7 +407,9 @@ impl eframe::App for LogViewerApp {
                         } else {
                             self.search.next_match();
                         }
-                        self.scroll_to_match = true;
+                        if let Some(line_idx) = self.search.get_current_match_index() {
+                            self.scroll_target_line = Some(line_idx);
+                        }
                         response.request_focus(); // Keep focus
                     }
                     
@@ -409,18 +418,24 @@ impl eframe::App for LogViewerApp {
                         // Navigate to first match when typing
                         if self.search.matches.len() > 0 {
                             self.search.current_match = Some(0);
-                            self.scroll_to_match = true;
+                            if let Some(line_idx) = self.search.get_current_match_index() {
+                                self.scroll_target_line = Some(line_idx);
+                            }
                         }
                     }
                     
                     if ui.button("⬆").on_hover_text("Previous Match").clicked() {
                         self.search.prev_match();
-                        self.scroll_to_match = true;
+                        if let Some(line_idx) = self.search.get_current_match_index() {
+                            self.scroll_target_line = Some(line_idx);
+                        }
                     }
                     
                     if ui.button("⬇").on_hover_text("Next Match").clicked() {
                         self.search.next_match();
-                        self.scroll_to_match = true;
+                        if let Some(line_idx) = self.search.get_current_match_index() {
+                            self.scroll_target_line = Some(line_idx);
+                        }
                     }
                     
                     if !self.search.matches.is_empty() {
@@ -457,7 +472,7 @@ impl eframe::App for LogViewerApp {
                         egui::CollapsingHeader::new("Filters")
                             .default_open(true)
                             .show(ui, |ui| {
-                            ui.label("Log Levels:");
+                            ui.label(egui::RichText::new("Log Levels:").size(15.0));
                             let mut filter_changed = false;
                             
                             let levels = [
@@ -469,7 +484,7 @@ impl eframe::App for LogViewerApp {
                             
                             for (level, label, color) in levels {
                                 let mut enabled = self.enabled_levels.contains(&level);
-                                if ui.checkbox(&mut enabled, egui::RichText::new(label).color(color)).changed() {
+                                if ui.checkbox(&mut enabled, egui::RichText::new(label).color(color).size(15.0)).changed() {
                                     if enabled {
                                         self.enabled_levels.insert(level);
                                     } else {
@@ -484,7 +499,7 @@ impl eframe::App for LogViewerApp {
                             }
                             
                             ui.add_space(5.0);
-                            ui.label(format!("Showing: {} / {} lines", self.filtered_entries.len(), self.entries.len()));
+                            ui.label(egui::RichText::new(format!("Showing: {} / {} lines", self.filtered_entries.len(), self.entries.len())).size(13.0));
                         });
                         
                         ui.separator();
@@ -494,7 +509,7 @@ impl eframe::App for LogViewerApp {
                             .default_open(true)
                             .show(ui, |ui| {
                             // Tail Log
-                            ui.checkbox(&mut self.tail_log, "Tail Log (Auto-refresh)");
+                            ui.checkbox(&mut self.tail_log, egui::RichText::new("Tail Log (Auto-refresh)").size(15.0));
                             if self.tail_log != self.config.tail_log {
                                 self.config.tail_log = self.tail_log;
                                 if self.tail_log {
@@ -507,7 +522,10 @@ impl eframe::App for LogViewerApp {
                             }
                             
                             // Scroll to End
-                            ui.checkbox(&mut self.scroll_to_end, "Auto-scroll to End");
+                            ui.checkbox(&mut self.scroll_to_end, egui::RichText::new("Auto-scroll to End").size(15.0));
+                            
+                            // Wrap Text
+                            ui.checkbox(&mut self.wrap_text, egui::RichText::new("Wrap Text").size(15.0));
                             if self.scroll_to_end != self.config.scroll_to_end {
                                 self.config.scroll_to_end = self.scroll_to_end;
                             }
@@ -519,7 +537,7 @@ impl eframe::App for LogViewerApp {
                         egui::CollapsingHeader::new("Appearance")
                             .default_open(true)
                             .show(ui, |ui| {
-                            ui.label("Theme:");
+                            ui.label(egui::RichText::new("Theme:").size(15.0));
                             ui.horizontal(|ui| {
                                 if ui.selectable_label(self.config.theme == Theme::Dark, "Dark").clicked() {
                                     self.config.theme = Theme::Dark;
@@ -567,8 +585,16 @@ impl eframe::App for LogViewerApp {
 
         // 4. Central Panel (Log View)
         egui::CentralPanel::default().show(ctx, |ui| {
-            let mut scroll_area = ScrollArea::vertical()
-                .auto_shrink([false; 2]);
+            // Use both scrolls when wrapping is disabled, vertical only when wrapping
+            let mut scroll_area = if self.wrap_text {
+                ScrollArea::vertical()
+            } else {
+                ScrollArea::both()
+            };
+            
+            scroll_area = scroll_area
+                .auto_shrink([false; 2])
+                .id_source("log_scroll_area");
             
             // Handle scroll to top
             if self.scroll_to_top {
@@ -576,8 +602,17 @@ impl eframe::App for LogViewerApp {
                 self.scroll_to_top = false;
             }
             
+            // Apply calculated scroll offset if available
+            if let Some(offset) = self.target_scroll_offset {
+                scroll_area = scroll_area.vertical_scroll_offset(offset);
+                self.target_scroll_offset = None;
+                self.scroll_target_line = None; // Clear the target after scroll is applied
+            }
+            
             scroll_area.show(ui, |ui| {
-                    ui.spacing_mut().item_spacing.y = 0.0; // Zero spacing between lines
+                // Track Y position as we render
+                let mut current_y = 0.0;
+                    ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0); // Zero spacing between all items
                     
                     if self.entries.is_empty() {
                         ui.centered_and_justified(|ui| {
@@ -588,65 +623,139 @@ impl eframe::App for LogViewerApp {
                             ui.label("No entries match the current filters.");
                         });
                     } else {
-                        // Chunk size for rendering
-                        const CHUNK_SIZE: usize = 100;
+                        // Render all filtered entries as a single TextEdit (allows multi-line selection)
+                        let mut all_text = String::new();
+                        let mut job = egui::text::LayoutJob::default();
                         
-                        // Render filtered entries in chunks
-                        for chunk in self.filtered_entries.chunks(CHUNK_SIZE) {
-                            let mut chunk_text = String::new();
-                            let mut job = egui::text::LayoutJob::default();
-                            let mut chunk_contains_match = false;
+                        // Track character count to find the exact position of the target line
+                        let mut current_char_count = 0;
+                        let mut target_char_index = None;
+                        
+                        for (_entry_idx_in_filtered, &entry_idx) in self.filtered_entries.iter().enumerate() {
+                            let entry = &self.entries[entry_idx];
+                            let color = self.get_color_for_level(&entry.level);
                             
-                            for &entry_idx in chunk {
-                                let entry = &self.entries[entry_idx];
-                                let color = self.get_color_for_level(&entry.level);
-                                
-                                let is_search_match = self.search.is_match(entry_idx);
-                                let is_current_match = self.search.is_current_match(entry_idx);
-                                
-                                if is_current_match && self.scroll_to_match {
-                                    self.scroll_to_match = false;
-                                    chunk_contains_match = true;
+                            let is_search_match = self.search.is_match(entry_idx);
+                            let is_current_match = self.search.is_current_match(entry_idx);
+                            
+                            // Check if this is the scroll target
+                            if let Some(target) = self.scroll_target_line {
+                                if entry_idx == target && target_char_index.is_none() {
+                                    target_char_index = Some(current_char_count);
+                                }
+                            }
+                            
+                            for (line_idx, line) in entry.raw_line.lines().enumerate() {
+                                if line_idx == 0 {
+                                    // Line number
+                                    let line_num_text = format!("{:6}   ", entry.line_number);
+                                    let text_color = if is_current_match {
+                                        Color32::from_rgb(255, 200, 0)
+                                    } else {
+                                        color
+                                    };
+                                    job.append(
+                                        &line_num_text,
+                                        0.0,
+                                        egui::TextFormat {
+                                            font_id: egui::FontId::monospace(self.config.font_size * 0.85),
+                                            color: text_color,
+                                            ..Default::default()
+                                        },
+                                    );
+                                    all_text.push_str(&line_num_text);
+                                    current_char_count += line_num_text.chars().count();
+                                } else {
+                                    // Indentation for continuation lines
+                                    let indent = "         ";
+                                    job.append(
+                                        indent,
+                                        0.0,
+                                        egui::TextFormat {
+                                            font_id: egui::FontId::monospace(self.config.font_size),
+                                            color: Color32::TRANSPARENT,
+                                            ..Default::default()
+                                        },
+                                    );
+                                    all_text.push_str(indent);
+                                    current_char_count += indent.chars().count();
                                 }
                                 
-                                let lines: Vec<&str> = entry.raw_line.lines().collect();
-                                for (line_idx, line) in lines.iter().enumerate() {
-                                    // Line number and match icon
-                                    if line_idx == 0 {
-                                        let (line_num_text, text_color) = if is_current_match {
-                                            (format!("{:6} 🔍 ", entry.line_number), Color32::YELLOW)
-                                        } else if is_search_match {
-                                            (format!("{:6} 🔍 ", entry.line_number), Color32::GRAY)
-                                        } else {
-                                            (format!("{:6}   ", entry.line_number), Color32::GRAY)
-                                        };
+                                // Log content with search highlighting
+                                if is_search_match {
+                                    if let Some(positions) = self.search.get_match_positions(entry_idx) {
+                                        let mut last_end = 0;
                                         
-                                        job.append(
-                                            &line_num_text,
-                                            0.0,
-                                            egui::TextFormat {
-                                                font_id: egui::FontId::monospace(self.config.font_size),
-                                                color: text_color,
-                                                ..Default::default()
-                                            },
-                                        );
-                                        chunk_text.push_str(&line_num_text);
+                                        for &(start, end) in positions {
+                                            if start > line.len() || end > line.len() || start > end {
+                                                continue;
+                                            }
+                                            
+                                            if start > last_end && last_end < line.len() {
+                                                let safe_start = last_end.min(line.len());
+                                                let safe_end = start.min(line.len());
+                                                if safe_start < safe_end {
+                                                    job.append(
+                                                        &line[safe_start..safe_end],
+                                                        0.0,
+                                                        egui::TextFormat {
+                                                            font_id: egui::FontId::monospace(self.config.font_size),
+                                                            color,
+                                                            background: self.get_bg_color_for_level(&entry.level),
+                                                            ..Default::default()
+                                                        },
+                                                    );
+                                                }
+                                            }
+                                            
+                                            let highlight_color = if is_current_match {
+                                                Color32::from_rgb(255, 200, 0)
+                                            } else {
+                                                Color32::from_rgb(255, 255, 150)
+                                            };
+                                            
+                                            if start < line.len() && end <= line.len() {
+                                                job.append(
+                                                    &line[start..end],
+                                                    0.0,
+                                                    egui::TextFormat {
+                                                        font_id: egui::FontId::monospace(self.config.font_size),
+                                                        color: Color32::BLACK,
+                                                        background: highlight_color,
+                                                        underline: egui::Stroke::new(1.0, Color32::from_rgb(200, 150, 0)),
+                                                        ..Default::default()
+                                                    },
+                                                );
+                                            }
+                                            
+                                            last_end = end;
+                                        }
+                                        
+                                        if last_end < line.len() {
+                                            job.append(
+                                                &line[last_end..],
+                                                0.0,
+                                                egui::TextFormat {
+                                                    font_id: egui::FontId::monospace(self.config.font_size),
+                                                    color,
+                                                    background: self.get_bg_color_for_level(&entry.level),
+                                                    ..Default::default()
+                                                },
+                                            );
+                                        }
                                     } else {
-                                        // Indentation for continuation lines
-                                        let indent = "         "; // 6 chars + 3 spaces
                                         job.append(
-                                            indent,
+                                            line,
                                             0.0,
                                             egui::TextFormat {
                                                 font_id: egui::FontId::monospace(self.config.font_size),
-                                                color: Color32::TRANSPARENT, // Invisible but takes space
+                                                color,
+                                                background: self.get_bg_color_for_level(&entry.level),
                                                 ..Default::default()
                                             },
                                         );
-                                        chunk_text.push_str(indent);
                                     }
-                                    
-                                    // Log content
+                                } else {
                                     job.append(
                                         line,
                                         0.0,
@@ -657,39 +766,71 @@ impl eframe::App for LogViewerApp {
                                             ..Default::default()
                                         },
                                     );
-                                    chunk_text.push_str(line);
-                                    
-                                    // Newline
-                                    job.append(
-                                        "\n",
-                                        0.0,
-                                        egui::TextFormat {
-                                            font_id: egui::FontId::monospace(self.config.font_size),
-                                            color: Color32::TRANSPARENT,
-                                            ..Default::default()
-                                        },
-                                    );
-                                    chunk_text.push('\n');
                                 }
-                            }
-                            
-                            // Render the chunk as a single TextEdit
-                            let response = ui.add(
-                                egui::TextEdit::multiline(&mut chunk_text)
-                                    .layouter(&mut |ui, _string, _wrap_width| {
-                                        let mut layout_job = job.clone();
-                                        layout_job.wrap.max_width = ui.available_width();
-                                        ui.fonts(|f| f.layout_job(layout_job))
-                                    })
-                                    .frame(false)
-                                    .desired_width(f32::INFINITY)
-                            );
-                            
-                            // Scroll to this chunk if it contains the match
-                            if chunk_contains_match {
-                                response.scroll_to_me(Some(Align::TOP));
+                                all_text.push_str(line);
+                                current_char_count += line.chars().count();
+                                
+                                // Newline
+                                job.append(
+                                    "\n",
+                                    0.0,
+                                    egui::TextFormat {
+                                        font_id: egui::FontId::monospace(self.config.font_size),
+                                        color: Color32::TRANSPARENT,
+                                        ..Default::default()
+                                    },
+                                );
+                                all_text.push('\n');
+                                current_char_count += 1; // Count newline char
                             }
                         }
+                        
+                        // Configure layout job wrapping
+                        let wrap_enabled = self.wrap_text;
+                        if wrap_enabled {
+                            job.wrap.max_width = ui.available_width();
+                        } else {
+                            job.wrap.max_width = f32::INFINITY;
+                        }
+                        
+                        // Calculate Galley to find exact scroll position
+                        let galley = ui.fonts(|f| f.layout_job(job));
+                        
+                        // If we have a target, calculate exact offset from Galley
+                        if let Some(char_idx) = target_char_index {
+                            if self.target_scroll_offset.is_none() {
+                                // Find the row containing the target character index
+                                let mut accumulated_chars = 0;
+                                let mut y_offset = 0.0;
+                                for row in &galley.rows {
+                                    let row_char_count = row.char_count_excluding_newline() + if row.ends_with_newline { 1 } else { 0 };
+                                    if accumulated_chars + row_char_count > char_idx {
+                                        // Found the row containing the character
+                                        y_offset = row.rect.min.y;
+                                        break;
+                                    }
+                                    accumulated_chars += row_char_count;
+                                }
+                                
+                                // Center the target line in viewport
+                                let viewport_height = ui.available_height();
+                                let centered_offset = (y_offset - viewport_height / 2.0).max(0.0);
+                                self.target_scroll_offset = Some(centered_offset);
+                            }
+                        }
+                        
+                        // Render using the pre-calculated Galley
+                        ui.add(
+                            egui::TextEdit::multiline(&mut all_text)
+                                .layouter(&mut |ui, _string, _wrap_width| {
+                                    // Return the pre-calculated galley (cloned because layouter might be called multiple times)
+                                    // Note: we ignore the passed wrap_width because we already used the correct one
+                                    galley.clone() 
+                                })
+                                .frame(false)
+                                .margin(egui::vec2(0.0, 0.0))
+                                .desired_width(f32::INFINITY)
+                        );
                         
                         // Add a spacer at the bottom to ensure we can scroll to the very end
                         ui.allocate_space(egui::vec2(ui.available_width(), 0.0));

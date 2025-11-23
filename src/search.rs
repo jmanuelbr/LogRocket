@@ -10,6 +10,7 @@ pub struct SearchState {
     pub matches: Vec<usize>,
     pub current_match: Option<usize>,
     pub regex: Option<Regex>,
+    pub match_positions: Vec<(usize, Vec<(usize, usize)>)>, // (line_idx, vec of (start, end))
 }
 
 impl SearchState {
@@ -22,6 +23,7 @@ impl SearchState {
             matches: Vec::new(),
             current_match: None,
             regex: None,
+            match_positions: Vec::new(),
         }
     }
 
@@ -29,6 +31,7 @@ impl SearchState {
         self.matches.clear();
         self.current_match = None;
         self.regex = None;
+        self.match_positions.clear();
 
         if self.query.is_empty() {
             return;
@@ -52,23 +55,38 @@ impl SearchState {
         };
 
         for (idx, entry) in entries.iter().enumerate() {
-            let text = if self.case_sensitive {
-                &entry.raw_line
-            } else {
-                // For case-insensitive, we'll check in the search function
-                &entry.raw_line
-            };
+            let text = &entry.raw_line;
+            let mut positions = Vec::new();
 
-            let matches = if let Some(ref regex) = pattern {
-                regex.is_match(text)
-            } else if self.case_sensitive {
-                text.contains(&self.query)
+            if let Some(ref regex) = pattern {
+                // Regex search - find all matches
+                for mat in regex.find_iter(text) {
+                    positions.push((mat.start(), mat.end()));
+                }
             } else {
-                text.to_lowercase().contains(&self.query.to_lowercase())
-            };
+                // Simple text search - find all occurrences
+                let search_text = if self.case_sensitive {
+                    text.to_string()
+                } else {
+                    text.to_lowercase()
+                };
+                let search_query = if self.case_sensitive {
+                    self.query.clone()
+                } else {
+                    self.query.to_lowercase()
+                };
+                
+                let mut start = 0;
+                while let Some(pos) = search_text[start..].find(&search_query) {
+                    let actual_pos = start + pos;
+                    positions.push((actual_pos, actual_pos + self.query.len()));
+                    start = actual_pos + 1;
+                }
+            }
 
-            if matches {
+            if !positions.is_empty() {
                 self.matches.push(idx);
+                self.match_positions.push((idx, positions));
             }
         }
 
@@ -109,6 +127,13 @@ impl SearchState {
 
     pub fn is_current_match(&self, line_index: usize) -> bool {
         self.get_current_match_index() == Some(line_index)
+    }
+    
+    pub fn get_match_positions(&self, line_index: usize) -> Option<&Vec<(usize, usize)>> {
+        self.match_positions
+            .iter()
+            .find(|(idx, _)| *idx == line_index)
+            .map(|(_, positions)| positions)
     }
 }
 
