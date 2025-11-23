@@ -393,7 +393,9 @@ impl eframe::App for LogViewerApp {
                     
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         // Section: Filters
-                        ui.collapsing("Filters", |ui| {
+                        egui::CollapsingHeader::new("Filters")
+                            .default_open(true)
+                            .show(ui, |ui| {
                             ui.label("Log Levels:");
                             let mut filter_changed = false;
                             
@@ -427,7 +429,9 @@ impl eframe::App for LogViewerApp {
                         ui.separator();
                         
                         // Section: View Options
-                        ui.collapsing("View Options", |ui| {
+                        egui::CollapsingHeader::new("View Options")
+                            .default_open(true)
+                            .show(ui, |ui| {
                             // Tail Log
                             ui.checkbox(&mut self.tail_log, "Tail Log (Auto-refresh)");
                             if self.tail_log != self.config.tail_log {
@@ -451,7 +455,9 @@ impl eframe::App for LogViewerApp {
                         ui.separator();
                         
                         // Section: Appearance
-                        ui.collapsing("Appearance", |ui| {
+                        egui::CollapsingHeader::new("Appearance")
+                            .default_open(true)
+                            .show(ui, |ui| {
                             ui.label("Theme:");
                             ui.horizontal(|ui| {
                                 if ui.selectable_label(self.config.theme == Theme::Dark, "Dark").clicked() {
