@@ -4,11 +4,17 @@ use egui::Color32;
 #[derive(Debug, Clone)]
 pub struct ColorPalette {
     pub info: Color32,
+    pub info_bg: Color32,
     pub warn: Color32,
+    pub warn_bg: Color32,
     pub error: Color32,
+    pub error_bg: Color32,
     pub debug: Color32,
+    pub debug_bg: Color32,
     pub trace: Color32,
+    pub trace_bg: Color32,
     pub default: Color32,
+    pub default_bg: Color32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -20,23 +26,51 @@ pub enum Theme {
 impl ColorPalette {
     pub fn dark() -> Self {
         Self {
+            // INFO - keep as is (white text, transparent background)
             info: Color32::from_rgb(239, 246, 246),
-            warn: Color32::from_rgb(242, 246, 190),
-            error: Color32::from_rgb(251, 212, 212),
-            debug: Color32::from_rgb(222, 251, 199),
+            info_bg: Color32::TRANSPARENT,
+            
+            // WARN - #5E4602 text, #FFE67EE6 background
+            warn: Color32::from_rgb(0x5E, 0x46, 0x02),
+            warn_bg: Color32::from_rgba_unmultiplied(0xFF, 0xE6, 0x7E, 0xE6),
+            
+            // ERROR - #721C24 text, #FDBAB5E6 background
+            error: Color32::from_rgb(0x72, 0x1C, 0x24),
+            error_bg: Color32::from_rgba_unmultiplied(0xFD, 0xBA, 0xB5, 0xE6),
+            
+            // DEBUG - #155724 text, #D4EDDAE6 background
+            debug: Color32::from_rgb(0x15, 0x57, 0x24),
+            debug_bg: Color32::from_rgba_unmultiplied(0xD4, 0xED, 0xDA, 0xE6),
+            
             trace: Color32::from_rgb(100, 100, 100),
+            trace_bg: Color32::TRANSPARENT,
             default: Color32::from_rgb(220, 220, 220),
+            default_bg: Color32::TRANSPARENT,
         }
     }
 
     pub fn light() -> Self {
         Self {
-            info: Color32::from_rgb(0, 92, 197), // Blue
-            warn: Color32::from_rgb(176, 136, 0), // Dark Yellow/Orange
-            error: Color32::from_rgb(215, 58, 73), // Red
-            debug: Color32::from_rgb(34, 134, 58), // Green
-            trace: Color32::from_rgb(88, 96, 105), // Gray
-            default: Color32::from_rgb(36, 41, 46), // Almost Black
+            // INFO - almost black for light mode
+            info: Color32::from_rgb(36, 41, 46),
+            info_bg: Color32::TRANSPARENT,
+            
+            // WARN - #5E4602 text, #FFE67EE6 background
+            warn: Color32::from_rgb(0x5E, 0x46, 0x02),
+            warn_bg: Color32::from_rgba_unmultiplied(0xFF, 0xE6, 0x7E, 0xE6),
+            
+            // ERROR - #721C24 text, #FDBAB5E6 background
+            error: Color32::from_rgb(0x72, 0x1C, 0x24),
+            error_bg: Color32::from_rgba_unmultiplied(0xFD, 0xBA, 0xB5, 0xE6),
+            
+            // DEBUG - #155724 text, #D4EDDAE6 background
+            debug: Color32::from_rgb(0x15, 0x57, 0x24),
+            debug_bg: Color32::from_rgba_unmultiplied(0xD4, 0xED, 0xDA, 0xE6),
+            
+            trace: Color32::from_rgb(88, 96, 105),
+            trace_bg: Color32::TRANSPARENT,
+            default: Color32::from_rgb(36, 41, 46),
+            default_bg: Color32::TRANSPARENT,
         }
     }
 }

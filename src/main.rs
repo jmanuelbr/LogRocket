@@ -28,6 +28,7 @@ fn load_icon() -> eframe::IconData {
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         initial_window_size: Some(egui::vec2(1200.0, 800.0)),
+        maximized: true,
         icon_data: Some(load_icon()),
         ..Default::default()
     };

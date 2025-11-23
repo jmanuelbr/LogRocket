@@ -31,6 +31,7 @@ pub struct LogViewerApp {
     // New state fields
     focus_search: bool,
     scroll_to_match: bool,
+    scroll_to_top: bool,
 }
 
 impl LogViewerApp {
@@ -158,6 +159,17 @@ impl LogViewerApp {
             LogLevel::Unknown => self.config.color_palette.default,
         }
     }
+    
+    fn get_bg_color_for_level(&self, level: &LogLevel) -> egui::Color32 {
+        match level {
+            LogLevel::Info => self.config.color_palette.info_bg,
+            LogLevel::Warn => self.config.color_palette.warn_bg,
+            LogLevel::Error => self.config.color_palette.error_bg,
+            LogLevel::Debug => self.config.color_palette.debug_bg,
+            LogLevel::Trace => self.config.color_palette.trace_bg,
+            LogLevel::Unknown => self.config.color_palette.default_bg,
+        }
+    }
 }
 
 impl Default for LogViewerApp {
@@ -190,6 +202,7 @@ impl Default for LogViewerApp {
             },
             focus_search: false,
             scroll_to_match: false,
+            scroll_to_top: false,
         }
     }
 }
@@ -212,25 +225,73 @@ impl eframe::App for LogViewerApp {
                 }
             }
             
+            // Cmd+S to toggle sidebar
+            if input.key_pressed(egui::Key::S) && 
+               (input.modifiers.command || input.modifiers.ctrl) {
+                self.show_sidebar = !self.show_sidebar;
+            }
+            
             // ESC to close search
             if input.key_pressed(egui::Key::Escape) && self.show_search {
                 self.show_search = false;
             }
-
-            // Font size shortcuts
+            
+            // Navigation shortcuts: Cmd+ArrowUp/Down to jump to top/bottom
             if input.modifiers.command || input.modifiers.ctrl {
                 if input.key_pressed(egui::Key::ArrowUp) {
-                    self.config.font_size = (self.config.font_size + 1.0).min(30.0);
+                    // Jump to top
+                    self.scroll_to_top = true;
                 }
                 if input.key_pressed(egui::Key::ArrowDown) {
+                    // Jump to bottom
+                    self.auto_scroll_frames = 3;
+                }
+            }
+
+            // Font size shortcuts: Cmd+= to increase, Cmd+- to decrease (like VS Code/Sublime)
+            if input.modifiers.command || input.modifiers.ctrl {
+                // Decrease with Cmd+-
+                if input.key_pressed(egui::Key::Minus) {
                     self.config.font_size = (self.config.font_size - 1.0).max(8.0);
+                }
+                
+                // Increase with Cmd+= or Cmd++
+                // Try multiple approaches to catch the equals key
+                let mut should_increase = false;
+                
+                // Check key events
+                for event in &input.events {
+                    match event {
+                        egui::Event::Key { key, pressed: true, .. } => {
+                            // Some keyboards report equals as a specific key
+                            if format!("{:?}", key).contains("Num0") || 
+                               format!("{:?}", key).contains("Equals") {
+                                should_increase = true;
+                            }
+                        }
+                        egui::Event::Text(text) => {
+                            if text == "=" || text == "+" {
+                                should_increase = true;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                
+                if should_increase {
+                    self.config.font_size = (self.config.font_size + 1.0).min(30.0);
                 }
             }
         });
         
         // Apply theme
         match self.config.theme {
-            Theme::Dark => ctx.set_visuals(egui::Visuals::dark()),
+            Theme::Dark => {
+                let mut visuals = egui::Visuals::dark();
+                visuals.panel_fill = egui::Color32::from_rgb(0x2e, 0x2e, 0x2e);
+                visuals.extreme_bg_color = egui::Color32::from_rgb(0x2e, 0x2e, 0x2e);
+                ctx.set_visuals(visuals);
+            }
             Theme::Light => ctx.set_visuals(egui::Visuals::light()),
         }
         
@@ -506,9 +567,16 @@ impl eframe::App for LogViewerApp {
 
         // 4. Central Panel (Log View)
         egui::CentralPanel::default().show(ctx, |ui| {
-            ScrollArea::vertical()
-                .auto_shrink([false; 2])
-                .show(ui, |ui| {
+            let mut scroll_area = ScrollArea::vertical()
+                .auto_shrink([false; 2]);
+            
+            // Handle scroll to top
+            if self.scroll_to_top {
+                scroll_area = scroll_area.vertical_scroll_offset(0.0);
+                self.scroll_to_top = false;
+            }
+            
+            scroll_area.show(ui, |ui| {
                     ui.spacing_mut().item_spacing.y = 0.0; // Zero spacing between lines
                     
                     if self.entries.is_empty() {
@@ -585,6 +653,7 @@ impl eframe::App for LogViewerApp {
                                         egui::TextFormat {
                                             font_id: egui::FontId::monospace(self.config.font_size),
                                             color,
+                                            background: self.get_bg_color_for_level(&entry.level),
                                             ..Default::default()
                                         },
                                     );
